@@ -122,7 +122,7 @@ class RankLLM(ABC):
                 prefs_lst = []
 
                 for n_idx in range(num_aggr):
-                    from fastrank.data import RankingExample
+                    from permsc.data import RankingExample
                     result_cpy = copy.deepcopy(orig_cpy)
                     result_cpy['hits'] = result_cpy['hits'][start_pos:end_pos]
                     example = RankingExample.from_pyserini_dict(result_cpy)  # type: RankingExample
@@ -147,7 +147,7 @@ class RankLLM(ABC):
                     prefs_lst.append(prefs)
 
                 # Aggregate preferences
-                from fastrank import KemenyOptimalAggregator
+                from permsc import KemenyOptimalAggregator
                 aggregator = KemenyOptimalAggregator()
                 prefs = aggregator.aggregate(np.array(prefs_lst))
                 self.receive_raw_permutation(rerank_result, prefs, start_pos, end_pos)
