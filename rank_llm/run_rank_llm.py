@@ -64,7 +64,7 @@ def main(args):
         print("Reusing existing retrieved results.")
 
     with open(candidates_file, "r") as f:
-        retrieved_results = json.load(f)
+        retrieved_results = json.load(f)#[:10]
 
     print("\nReranking:")
     rerank_results = []
@@ -87,6 +87,7 @@ def main(args):
             step=10,
             shuffle_candidates=shuffle_candidates,
             logging=print_prompts_responses,
+            num_aggr=20,
         )
         rerank_results.append(rerank_result)
         input_token_counts.append(in_token_count)

@@ -7,6 +7,7 @@ from pathlib import Path
 import random
 from typing import List, Union, Dict, Any, Tuple
 
+import numpy as np
 from tqdm import tqdm
 
 
@@ -72,10 +73,10 @@ class RankLLM(ABC):
         permutation, out_token_count = self.run_llm(prompt)
         if logging:
             print(f"output: {permutation}")
-        rerank_result = self.receive_permutation(
+        rerank_result, raw_response = self.receive_permutation(
             result, permutation, rank_start, rank_end
         )
-        return rerank_result, in_token_count, out_token_count, prompt, permutation
+        return rerank_result, in_token_count, out_token_count, prompt, permutation, raw_response
 
     def sliding_windows(
         self,
@@ -85,6 +86,7 @@ class RankLLM(ABC):
         window_size: int,
         step: int,
         shuffle_candidates: bool = False,
+        num_aggr: int = 1,
         logging: bool = False,
     ):
         in_token_count = 0
@@ -105,14 +107,51 @@ class RankLLM(ABC):
         prompts = []
         permutations = []
         while start_pos >= rank_start:
-            start_pos = max(start_pos, rank_start)
-            (
-                rerank_result,
-                in_count,
-                out_count,
-                prompt,
-                permutation,
-            ) = self.permutation_pipeline(rerank_result, start_pos, end_pos, logging)
+            if num_aggr == 1 or start_pos > rank_start:
+                start_pos = max(start_pos, rank_start)
+                (
+                    rerank_result,
+                    in_count,
+                    out_count,
+                    prompt,
+                    permutation,
+                    _,
+                ) = self.permutation_pipeline(rerank_result, start_pos, end_pos, logging)
+            else:
+                orig_cpy = copy.deepcopy(rerank_result)
+                prefs_lst = []
+
+                for n_idx in range(num_aggr):
+                    from fastrank.data import RankingExample
+                    result_cpy = copy.deepcopy(orig_cpy)
+                    result_cpy['hits'] = result_cpy['hits'][start_pos:end_pos]
+                    example = RankingExample.from_pyserini_dict(result_cpy)  # type: RankingExample
+                    perm_mask = example.randomize_order() # if n_idx > 0 else np.arange(len(example.hits))
+                    pipeline_cpy = copy.deepcopy(orig_cpy)
+
+                    shuf_arr = np.array(pipeline_cpy['hits'][start_pos:end_pos], dtype=object)[perm_mask]
+                    pipeline_cpy['hits'] = pipeline_cpy['hits'][:start_pos] + shuf_arr.tolist() + pipeline_cpy['hits'][end_pos:]
+
+                    start_pos = max(start_pos, rank_start)
+                    (
+                        _,
+                        in_count,
+                        out_count,
+                        prompt,
+                        permutation,
+                        raw_response
+                    ) = self.permutation_pipeline(pipeline_cpy, start_pos, end_pos, logging)
+
+                    prefs = example.permuted_preferences_to_original_order(raw_response)
+                    print(prefs)
+                    prefs_lst.append(prefs)
+
+                # Aggregate preferences
+                from fastrank import KemenyOptimalAggregator
+                aggregator = KemenyOptimalAggregator()
+                prefs = aggregator.aggregate(np.array(prefs_lst))
+                self.receive_raw_permutation(rerank_result, prefs, start_pos, end_pos)
+
             in_token_count += in_count
             out_token_count += out_count
             prompts.append(prompt)
@@ -197,7 +236,21 @@ class RankLLM(ABC):
                 item["hits"][j + rank_start]["rank"] = cut_range[j]["rank"]
             if "score" in item["hits"][j + rank_start]:
                 item["hits"][j + rank_start]["score"] = cut_range[j]["score"]
-        return item
+        return item, response
+
+    def receive_raw_permutation(
+        self, item: Dict[str, Any], raw_perms: List[int], rank_start: int, rank_end: int
+    ) -> Dict[str, Any]:
+        cut_range = copy.deepcopy(item["hits"][rank_start:rank_end])
+
+        for j, x in enumerate(raw_perms):
+            item["hits"][j + rank_start] = copy.deepcopy(cut_range[x])
+            if "rank" in item["hits"][j + rank_start]:
+                item["hits"][j + rank_start]["rank"] = cut_range[j]["rank"]
+            if "score" in item["hits"][j + rank_start]:
+                item["hits"][j + rank_start]["score"] = cut_range[j]["score"]
+
+        return item, raw_perms
 
     def write_rerank_results(
         self,

@@ -100,6 +100,7 @@ class RankVicuna(RankLLM):
                     (num_tokens - self.max_tokens() + self.num_output_tokens())
                     // (rank_end - rank_start),
                 )
+
         return prompt, self.get_num_tokens(prompt)
 
     def get_num_tokens(self, prompt: str) -> int:
